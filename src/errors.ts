@@ -34,3 +34,10 @@ export class TokenExchangeError extends OneHuxSSOError {
  * OneHuxClient.startAuthorization() for a fresh login; there is no silent-refresh path to fall
  * back to. */
 export class TokenExpiredError extends OneHuxSSOError {}
+
+/** An incoming POST to the /backchannel-logout route failed real OIDC Back-Channel Logout
+ * validation (spec §2.6) — bad/missing signature, wrong aud, missing/malformed events claim, a
+ * present nonce claim (forbidden), an expired token, or a missing sub/sid. The route turns this
+ * into the spec-required HTTP 400, never a 500 — a forged or malformed request on a public
+ * endpoint is expected adversarial input, not a server bug. */
+export class InvalidLogoutTokenError extends OneHuxSSOError {}

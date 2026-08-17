@@ -3,9 +3,10 @@
 // general hosted login page. Formalizes what dashboard/docs/integrate/backend/nodejs's own
 // guide otherwise only shows as copy-paste example code.
 
-export { OneHuxClient } from './client.js';
-export type { OneHuxClientOptions, PendingAuthorization, TokenResult } from './client.js';
+export { LOGOUT_EVENT_CLAIM_KEY, OneHuxClient } from './client.js';
+export type { LogoutTokenPayload, OneHuxClientOptions, PendingAuthorization, TokenResult } from './client.js';
 export {
+	InvalidLogoutTokenError,
 	InvalidStateError,
 	OneHuxSSOError,
 	TokenExchangeError,

@@ -10,11 +10,29 @@
 // previously produced a silent 404 HTML body instead of a JSON error — this client never lets
 // that ambiguity exist, since the two are separate constructor options, not one shared value.
 
-import { randomBytes, createHash } from 'node:crypto';
-import { InvalidStateError, TokenExchangeError, TokenExpiredError } from './errors.js';
+import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { InvalidLogoutTokenError, InvalidStateError, TokenExchangeError, TokenExpiredError } from './errors.js';
+
+export const LOGOUT_EVENT_CLAIM_KEY = 'http://schemas.openid.net/event/backchannel-logout';
 
 function base64url(buf: Buffer): string {
 	return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64urlDecode(input: string): Buffer {
+	return Buffer.from(input.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
+export interface LogoutTokenPayload {
+	iss: string;
+	aud: string;
+	iat: number;
+	exp: number;
+	jti: string;
+	events: Record<string, unknown>;
+	sub?: string;
+	sid?: string;
+	[key: string]: unknown;
 }
 
 export interface OneHuxClientOptions {
@@ -161,5 +179,94 @@ export class OneHuxClient {
 		};
 		if (params?.state) query.state = params.state;
 		return `${this.loginBaseUrl}/end-session?${new URLSearchParams(query).toString()}`;
+	}
+
+	/** Pull the `sid` claim out of an id_token WITHOUT verifying its signature — this package
+	 * cannot verify an id_token's signature at all (OneHux Accounts signs it with a server-only
+	 * key never shared with any client — the backend repo's oauth.services.build_jwt() docstring
+	 * flags this as a deliberate Phase-1 gap), and doesn't need to for this purpose: the token
+	 * was retrieved directly from a clientSecret-authenticated POST to /api/v1/oauth/token/ over
+	 * TLS, not an untrusted redirect parameter, so trusting its contents here (indexing this
+	 * local session for a later logout_token match) is standard OIDC RP practice. Returns
+	 * undefined if the token doesn't decode or has no sid claim. */
+	extractSidFromIdToken(idToken: string): string | undefined {
+		const parts = idToken.split('.');
+		if (parts.length !== 3) return undefined;
+		try {
+			const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8')) as Record<string, unknown>;
+			return typeof payload.sid === 'string' ? payload.sid : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Real OIDC Back-Channel Logout validation (spec §2.6), HS256-verified by hand via
+	 * node:crypto — this package has zero runtime dependencies and a full JWT library isn't
+	 * worth pulling in for one HMAC check. `signingSecret` is the dedicated secret shown once
+	 * when you registered your backchannel_logout_uri via
+	 * PATCH /api/v1/applications/{id}/backchannel-logout/ — deliberately NOT this client's own
+	 * clientSecret (the backend cannot read that back to sign anything with it; see the backend
+	 * repo's README.md ADR-074). Throws InvalidLogoutTokenError on any validation failure. */
+	verifyLogoutToken(params: { logoutToken: string; signingSecret: string }): LogoutTokenPayload {
+		const { logoutToken, signingSecret } = params;
+		const parts = logoutToken.split('.');
+		if (parts.length !== 3) {
+			throw new InvalidLogoutTokenError('logout_token is not a well-formed JWT.');
+		}
+		const [headerB64, payloadB64, signatureB64] = parts;
+
+		let header: Record<string, unknown>;
+		let payload: LogoutTokenPayload;
+		try {
+			header = JSON.parse(base64urlDecode(headerB64).toString('utf8'));
+			payload = JSON.parse(base64urlDecode(payloadB64).toString('utf8')) as LogoutTokenPayload;
+		} catch {
+			throw new InvalidLogoutTokenError('logout_token header/payload is not valid JSON.');
+		}
+		if (header.alg !== 'HS256') {
+			throw new InvalidLogoutTokenError(`Unsupported logout_token alg: ${String(header.alg)}`);
+		}
+
+		const expectedSignature = createHmac('sha256', signingSecret)
+			.update(`${headerB64}.${payloadB64}`)
+			.digest();
+		let actualSignature: Buffer;
+		try {
+			actualSignature = base64urlDecode(signatureB64);
+		} catch {
+			throw new InvalidLogoutTokenError('logout_token signature is not valid base64url.');
+		}
+		if (
+			actualSignature.length !== expectedSignature.length ||
+			!timingSafeEqual(actualSignature, expectedSignature)
+		) {
+			throw new InvalidLogoutTokenError('logout_token signature verification failed.');
+		}
+
+		const now = Math.floor(Date.now() / 1000);
+		if (typeof payload.exp !== 'number' || payload.exp < now) {
+			throw new InvalidLogoutTokenError('logout_token has expired.');
+		}
+		if (payload.aud !== this.clientId) {
+			throw new InvalidLogoutTokenError('logout_token aud does not match this client_id.');
+		}
+		if ('nonce' in payload) {
+			throw new InvalidLogoutTokenError('logout_token MUST NOT contain a nonce claim.');
+		}
+		if (
+			!payload.events ||
+			typeof payload.events !== 'object' ||
+			!(LOGOUT_EVENT_CLAIM_KEY in payload.events)
+		) {
+			throw new InvalidLogoutTokenError(
+				`logout_token is missing the required events claim (${LOGOUT_EVENT_CLAIM_KEY}).`
+			);
+		}
+		if (!payload.sub && !payload.sid) {
+			throw new InvalidLogoutTokenError(
+				'logout_token must contain a sub claim, a sid claim, or both.'
+			);
+		}
+		return payload;
 	}
 }

@@ -80,7 +80,13 @@ app.get('/', async (req, res) => {
 				.status(401)
 				.send(page(`<h1>Token expired</h1><pre>${err.message}</pre><a class="btn" href="/auth/login">Sign in again</a>`));
 		}
-		throw err;
+		// Same reasoning as onehux-sso's own /auth/userinfo route: never re-throw an
+		// unrecognized error (e.g. a transient network failure reaching OneHux) out of an
+		// async Express handler, or it crashes this whole example server, not just one request.
+		console.error('onehux-sso example: unexpected error calling getUserinfo:', err);
+		res
+			.status(502)
+			.send(page(`<h1>Temporarily unavailable</h1><p>Could not reach OneHux right now. Please try again.</p><a class="btn" href="/">Retry</a>`));
 	}
 });
 

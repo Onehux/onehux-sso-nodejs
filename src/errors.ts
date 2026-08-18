@@ -26,6 +26,22 @@ export class TokenExchangeError extends OneHuxSSOError {
 	}
 }
 
+/** POST /api/v1/oauth/token/ returned {"error": "step_up_required", ...} (README.md ADR-076,
+ * backend repo) — credentials/code were valid, but the platform's device/location trust gate
+ * rejected this specific login (password or Google) as coming from an unrecognized
+ * device/location. NOT a fatal error: OneHuxClient.exchangeCode() throws this distinctly from
+ * TokenExchangeError so the callback route can redirect the browser to complete step-up
+ * (magic link/email code/passkey) rather than showing a hard failure — the same automatic-
+ * redirect behavior the platform's own first-party dashboard uses for this identical error. */
+export class StepUpRequiredError extends OneHuxSSOError {
+	readonly errorDescription: string;
+
+	constructor(params: { errorDescription: string }) {
+		super(params.errorDescription);
+		this.errorDescription = params.errorDescription;
+	}
+}
+
 /** GET /api/v1/oauth/userinfo/ rejected the access token.
  *
  * OneHux Accounts does not currently issue a refresh token (access tokens are a 15-minute,

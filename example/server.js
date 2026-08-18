@@ -32,7 +32,14 @@ app.use(
 		cookie: { httpOnly: true, sameSite: 'lax' }
 	})
 );
-app.use('/auth', createOneHuxRouter(client));
+app.use(
+	'/auth',
+	createOneHuxRouter(client, {
+		// OIDC Back-Channel Logout (README.md ADR-074, backend repo) — the dedicated secret
+		// shown once by PATCH /api/v1/applications/{id}/backchannel-logout/, NOT clientSecret.
+		backchannelLogoutSigningSecret: process.env.ONEHUX_BACKCHANNEL_LOGOUT_SIGNING_SECRET
+	})
+);
 
 function page(body) {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>onehux-sso example</title>

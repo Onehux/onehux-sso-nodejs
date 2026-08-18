@@ -9,6 +9,7 @@ export {
 	InvalidLogoutTokenError,
 	InvalidStateError,
 	OneHuxSSOError,
+	StepUpRequiredError,
 	TokenExchangeError,
 	TokenExpiredError
 } from './errors.js';

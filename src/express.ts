@@ -11,7 +11,13 @@
 import type { Request, Response, Router as ExpressRouter } from 'express';
 import express, { Router } from 'express';
 import { OneHuxClient } from './client.js';
-import { InvalidLogoutTokenError, InvalidStateError, TokenExchangeError, TokenExpiredError } from './errors.js';
+import {
+	InvalidLogoutTokenError,
+	InvalidStateError,
+	StepUpRequiredError,
+	TokenExchangeError,
+	TokenExpiredError
+} from './errors.js';
 
 const STATE_SESSION_KEY = 'onehuxSsoState';
 const VERIFIER_SESSION_KEY = 'onehuxSsoPkceVerifier';
@@ -94,15 +100,20 @@ export function createOneHuxRouter(
 			string | undefined
 		>;
 		if (error) {
+			const session = req.session as Record<string, unknown>;
+			delete session[STATE_SESSION_KEY];
+			delete session[VERIFIER_SESSION_KEY];
 			res.status(400).send(`Sign-in failed: ${error} — ${errorDescription ?? ''}`);
 			return;
 		}
 
+		// Peeked, not deleted here: the step_up_required branch below needs these to still be in
+		// the session if it fires. Every other branch (success, InvalidStateError, any other
+		// TokenExchangeError) deletes them explicitly before returning — this is a narrow,
+		// additive branch, not a change to the general discard behavior.
 		const session = req.session as Record<string, unknown>;
 		const expectedState = session[STATE_SESSION_KEY] as string | undefined;
 		const codeVerifier = session[VERIFIER_SESSION_KEY] as string | undefined;
-		delete session[STATE_SESSION_KEY];
-		delete session[VERIFIER_SESSION_KEY];
 
 		try {
 			const tokens = await client.exchangeCode({
@@ -111,6 +122,8 @@ export function createOneHuxRouter(
 				expectedState,
 				codeVerifier
 			});
+			delete session[STATE_SESSION_KEY];
+			delete session[VERIFIER_SESSION_KEY];
 			session[sessionAccessTokenKey] = tokens.accessToken;
 
 			// OIDC Back-Channel Logout (optional): index this Express session by the OneHux
@@ -125,14 +138,36 @@ export function createOneHuxRouter(
 			res.redirect(loginSuccessRedirect);
 		} catch (err) {
 			if (err instanceof InvalidStateError) {
+				delete session[STATE_SESSION_KEY];
+				delete session[VERIFIER_SESSION_KEY];
 				res.status(400).send(err.message);
 				return;
 			}
+			if (err instanceof StepUpRequiredError) {
+				if (!codeVerifier || !state) {
+					res.status(400).send('step_up_required with no pending PKCE state to resume.');
+					return;
+				}
+				res.redirect(client.buildStepUpRedirectUrl({ codeVerifier, state }));
+				return;
+			}
 			if (err instanceof TokenExchangeError) {
+				delete session[STATE_SESSION_KEY];
+				delete session[VERIFIER_SESSION_KEY];
 				res.status(400).send(`${err.error}: ${err.errorDescription}`);
 				return;
 			}
-			throw err;
+			// Anything else (a raw network failure talking to apiBaseUrl, a timeout, etc.) is
+			// deliberately NOT re-thrown: an unhandled rejection inside an async Express route
+			// takes down the entire process, not just this request, if nothing else catches it.
+			// A transient failure reaching OneHux must degrade to one failed sign-in attempt, not
+			// crash the whole app for every other user's request in flight. Never forward the raw
+			// error to the browser either — log it server-side, same discipline as every other
+			// backend error boundary in this project.
+			console.error('OneHux SSO: unexpected error during token exchange:', err);
+			delete session[STATE_SESSION_KEY];
+			delete session[VERIFIER_SESSION_KEY];
+			res.status(502).send('Sign-in temporarily unavailable. Please try again.');
 		}
 	});
 
@@ -157,7 +192,10 @@ export function createOneHuxRouter(
 				res.status(401).json({ detail: err.message });
 				return;
 			}
-			throw err;
+			// Same reasoning as the /callback route: never re-throw an unrecognized error out of
+			// an async Express handler, or a transient network failure crashes the whole process.
+			console.error('OneHux SSO: unexpected error during userinfo lookup:', err);
+			res.status(502).json({ detail: 'Unable to reach OneHux right now. Please try again.' });
 		}
 	});
 

@@ -11,7 +11,13 @@
 // that ambiguity exist, since the two are separate constructor options, not one shared value.
 
 import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { InvalidLogoutTokenError, InvalidStateError, TokenExchangeError, TokenExpiredError } from './errors.js';
+import {
+	InvalidLogoutTokenError,
+	InvalidStateError,
+	StepUpRequiredError,
+	TokenExchangeError,
+	TokenExpiredError
+} from './errors.js';
 
 export const LOGOUT_EVENT_CLAIM_KEY = 'http://schemas.openid.net/event/backchannel-logout';
 
@@ -133,6 +139,13 @@ export class OneHuxClient {
 		});
 		const body = (await response.json()) as Record<string, unknown>;
 		if (!response.ok) {
+			if (body.error === 'step_up_required') {
+				// Deliberately distinct from TokenExchangeError: this is a recoverable, expected
+				// mid-login prompt (device/location trust gate), not a failed exchange — the
+				// caller (the /callback route) redirects the browser to complete step-up rather
+				// than showing an error.
+				throw new StepUpRequiredError({ errorDescription: (body.error_description as string) ?? '' });
+			}
 			throw new TokenExchangeError({
 				error: (body.error as string) ?? 'unknown_error',
 				errorDescription: (body.error_description as string) ?? '',
@@ -146,6 +159,31 @@ export class OneHuxClient {
 			expiresIn: body.expires_in as number,
 			scope: body.scope as string
 		};
+	}
+
+	/** Build the redirect used when exchangeCode() throws StepUpRequiredError (README.md
+	 * ADR-076, backend repo). Reuses this SAME pending authorization's clientId/redirectUri/
+	 * scope/state, and re-derives codeChallenge from the already-stored codeVerifier (PKCE
+	 * codeChallenge is a pure function of codeVerifier, so nothing extra needs to be persisted).
+	 * Deep-links straight to the real hosted email-OTP step-up page — the exact same URL the
+	 * platform's own first-party dashboard redirects to for this identical error (backend repo:
+	 * frontend/src/lib/server/step-up.ts) — rather than the generic /login page, since the
+	 * platform requires a step-up-caliber method specifically here. The caller MUST NOT discard
+	 * the pending codeVerifier/state before calling this: the browser will land back on this
+	 * same app's callback shortly with a brand-new code for this same state, and the callback
+	 * route needs the still-stored codeVerifier to exchange it. */
+	buildStepUpRedirectUrl(params: { codeVerifier: string; state: string }): string {
+		const codeChallenge = base64url(createHash('sha256').update(params.codeVerifier).digest());
+		const query = new URLSearchParams({
+			client_id: this.clientId,
+			redirect_uri: this.redirectUri,
+			code_challenge: codeChallenge,
+			code_challenge_method: 'S256',
+			scope: this.scope,
+			state: params.state,
+			reason: 'step_up'
+		});
+		return `${this.loginBaseUrl}/login/email-otp?${query.toString()}`;
 	}
 
 	/** GET {apiBaseUrl}/api/v1/oauth/userinfo/ — real claims (sub, name, email, picture,

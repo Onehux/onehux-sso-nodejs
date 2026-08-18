@@ -91,6 +91,28 @@ const claims = await client.getUserinfo({ accessToken: tokens.accessToken });
 const logoutUrl = client.buildLogoutUrl();
 ```
 
+## Public application launcher
+
+`GET /api/v1/organizations/{orgSlug}/public-applications/` is a real, public, unauthenticated
+platform endpoint — no `clientId`/`clientSecret` involved, usable for any Organization by its own
+slug, not just your own configured one. It returns only `name`/`logoUrl`/`homeUrl` for
+Applications that Organization has opted into public listing — a pure "what can I launch" list,
+never a way to start a sign-in flow.
+
+```ts
+const apps = await client.getPublicApplications({ orgSlug: 'onehux' });
+// [{ name: 'ODS', logoUrl: 'https://...', homeUrl: 'https://...' }]
+```
+
+Rendering is entirely up to you — this package ships the data method only, no UI component (this
+package spans too many rendering approaches — EJS, React SSR, a separate SPA — to have one
+honest "standard" to build against). A plain, unstyled illustration (adapt this to your own
+design, don't copy it as-is):
+
+```html
+${apps.map(app => `<a href="${app.homeUrl}"><img src="${app.logoUrl}" alt="${app.name}">${app.name}</a>`).join('')}
+```
+
 ## Logging out — what the user actually sees
 
 There are two different triggers, and — once you wire up back-channel logout (below) — they

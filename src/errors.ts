@@ -51,6 +51,18 @@ export class StepUpRequiredError extends OneHuxSSOError {
  * back to. */
 export class TokenExpiredError extends OneHuxSSOError {}
 
+/** GET /api/v1/organizations/{orgSlug}/public-applications/ returned a non-2xx response — no
+ * Organization matches that slug, or it isn't usable (deactivated/deleted). Carries the real
+ * error/error_description from the backend rather than a generic message. */
+export class OrganizationNotFoundError extends OneHuxSSOError {
+	readonly errorDescription: string;
+
+	constructor(params: { errorDescription: string }) {
+		super(params.errorDescription);
+		this.errorDescription = params.errorDescription;
+	}
+}
+
 /** An incoming POST to the /backchannel-logout route failed real OIDC Back-Channel Logout
  * validation (spec §2.6) — bad/missing signature, wrong aud, missing/malformed events claim, a
  * present nonce claim (forbidden), an expired token, or a missing sub/sid. The route turns this

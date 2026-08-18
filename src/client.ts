@@ -14,6 +14,7 @@ import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypt
 import {
 	InvalidLogoutTokenError,
 	InvalidStateError,
+	OrganizationNotFoundError,
 	StepUpRequiredError,
 	TokenExchangeError,
 	TokenExpiredError
@@ -55,6 +56,16 @@ export interface PendingAuthorization {
 	codeVerifier: string;
 	state: string;
 	authorizationUrl: string;
+}
+
+/** One entry from GET {apiBaseUrl}/api/v1/organizations/{orgSlug}/public-applications/ —
+ * deliberately only name/logoUrl/homeUrl, matching exactly what that endpoint returns. No
+ * clientId, no slug, no OAuth-relevant identifier: a pure "what can I launch" list, not a way
+ * to start a sign-in flow. */
+export interface PublicApplication {
+	name: string;
+	logoUrl: string;
+	homeUrl: string;
 }
 
 export interface TokenResult {
@@ -204,6 +215,25 @@ export class OneHuxClient {
 			);
 		}
 		return (await response.json()) as Record<string, unknown>;
+	}
+
+	/** GET {apiBaseUrl}/api/v1/organizations/{orgSlug}/public-applications/ — the platform's
+	 * public, unauthenticated application-launcher endpoint (README.md ADR-078). No
+	 * clientId/clientSecret involved: this is a public, unauthenticated GET, usable for any
+	 * Organization by its own slug, not just this client's own configured one. Throws
+	 * OrganizationNotFoundError if orgSlug doesn't match a usable Organization. */
+	async getPublicApplications(params: { orgSlug: string }): Promise<PublicApplication[]> {
+		const response = await fetch(
+			`${this.apiBaseUrl}/api/v1/organizations/${encodeURIComponent(params.orgSlug)}/public-applications/`
+		);
+		if (!response.ok) {
+			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+			throw new OrganizationNotFoundError({
+				errorDescription: (body.error_description as string) ?? 'Organization not found.'
+			});
+		}
+		const items = (await response.json()) as Array<Record<string, string>>;
+		return items.map((item) => ({ name: item.name, logoUrl: item.logo_url, homeUrl: item.home_url }));
 	}
 
 	/** Build the RP-initiated logout redirect (README.md ADR-070, backend repo):

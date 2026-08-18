@@ -4,11 +4,18 @@
 // guide otherwise only shows as copy-paste example code.
 
 export { LOGOUT_EVENT_CLAIM_KEY, OneHuxClient } from './client.js';
-export type { LogoutTokenPayload, OneHuxClientOptions, PendingAuthorization, TokenResult } from './client.js';
+export type {
+	LogoutTokenPayload,
+	OneHuxClientOptions,
+	PendingAuthorization,
+	PublicApplication,
+	TokenResult
+} from './client.js';
 export {
 	InvalidLogoutTokenError,
 	InvalidStateError,
 	OneHuxSSOError,
+	OrganizationNotFoundError,
 	StepUpRequiredError,
 	TokenExchangeError,
 	TokenExpiredError

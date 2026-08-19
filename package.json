@@ -1,6 +1,6 @@
 {
   "name": "@onehux/sso",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node.js/TypeScript SDK for OneHux Accounts SSO (Authorization Code + PKCE, real hosted login page, RP-initiated logout).",
   "license": "Apache-2.0",
   "publishConfig": {

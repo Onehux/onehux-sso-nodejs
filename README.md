@@ -202,5 +202,4 @@ npm run typecheck  # tsc --noEmit
 
 ## License
 
-MIT (see `LICENSE`) — a default choice, not yet a final decision; change before any public
-release if OneHux wants different terms.
+Apache License 2.0 — see `LICENSE`.

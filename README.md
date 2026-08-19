@@ -1,4 +1,4 @@
-# onehux-sso
+# @onehux/sso
 
 A real, installable Node.js/TypeScript SDK wrapping OneHux Accounts' Authorization Code + PKCE
 flow against its real hosted login page — formalizing what
@@ -7,19 +7,19 @@ otherwise only shows as copy-paste example code.
 
 Two entrypoints:
 
-- `onehux-sso` — the framework-agnostic `OneHuxClient` (PKCE, token exchange, `/userinfo`,
+- `@onehux/sso` — the framework-agnostic `OneHuxClient` (PKCE, token exchange, `/userinfo`,
   logout URL). No dependency on Express or any particular session store.
-- `onehux-sso/express` — `createOneHuxRouter()`, wiring `OneHuxClient` to a real
+- `@onehux/sso/express` — `createOneHuxRouter()`, wiring `OneHuxClient` to a real
   `express-session`. Only import this if you're using Express; it's a separate entrypoint
   precisely so the framework-agnostic client above never requires Express to be installed.
 
 ## Install
 
 ```bash
-npm install /path/to/onehux_sso_client/nodejs-package
+npm install @onehux/sso
 ```
 
-(Not yet published to npm — install from a local path/tarball until that's decided.)
+[npmjs.com/package/@onehux/sso](https://www.npmjs.com/package/@onehux/sso)
 
 ## Two hosts — don't mix them up
 
@@ -43,8 +43,8 @@ the backend repo's `README.md`, ADR-070) — the wrong host doesn't error loudly
    ```ts
    import express from 'express';
    import session from 'express-session';
-   import { OneHuxClient } from 'onehux-sso';
-   import { createOneHuxRouter } from 'onehux-sso/express';
+   import { OneHuxClient } from '@onehux/sso';
+   import { createOneHuxRouter } from '@onehux/sso/express';
 
    const client = new OneHuxClient({
      clientId: process.env.ONEHUX_CLIENT_ID!,
@@ -71,7 +71,7 @@ the backend repo's `README.md`, ADR-070) — the wrong host doesn't error loudly
 ## Using the client directly (any framework, or a custom flow)
 
 ```ts
-import { OneHuxClient } from 'onehux-sso';
+import { OneHuxClient } from '@onehux/sso';
 
 const client = new OneHuxClient({ /* ...same options as above... */ });
 

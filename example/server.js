@@ -1,11 +1,11 @@
-// Real, runnable example — exercises onehux-sso end to end against production. Uses
+// Real, runnable example — exercises @onehux/sso end to end against production. Uses
 // createOneHuxRouter() for the four standard routes, plus its own home/logged-out pages.
 
 import express from 'express';
 import session from 'express-session';
 import crypto from 'node:crypto';
-import { OneHuxClient, TokenExpiredError } from 'onehux-sso';
-import { createOneHuxRouter } from 'onehux-sso/express';
+import { OneHuxClient, TokenExpiredError } from '@onehux/sso';
+import { createOneHuxRouter } from '@onehux/sso/express';
 
 const PORT = Number(process.env.PORT || 4182);
 const CLIENT_ID = process.env.ONEHUX_CLIENT_ID;

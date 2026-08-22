@@ -67,6 +67,18 @@ server-to-server via your `clientId`/`clientSecret`, never seen by an end user.
    app.listen(3000);
    ```
 
+   > **A note on `cookie.maxAge`:** the example above deliberately doesn't set one, which makes
+   > it a real browser-session cookie (dies when the browser closes) — not because that's
+   > required, but because it's the safest default given the next paragraph. Whatever `maxAge`
+   > you do choose for your own session cookie is **completely independent** of the OneHux
+   > access token's own 15-minute lifetime stored inside that session. Setting a long `maxAge`
+   > (a week, a month) does **not** keep the user "signed in" for that long — it only controls
+   > how long the *cookie* survives. The *access token* inside it stops working after 15 minutes
+   > regardless, and every `/auth/userinfo` call after that point throws `TokenExpiredError`
+   > (see "No refresh token today" below). Pick `maxAge` for your own UX reasons, but don't treat
+   > it as, or document it to users as, a "stay signed in for N days" setting — this package
+   > doesn't have one.
+
    This gives you four real, working routes: `/auth/login`, `/auth/callback`, `/auth/logout`,
    and `/auth/userinfo` (a ready-to-use JSON endpoint your own frontend can call with
    `credentials: 'include'`, matching the BFF pattern documented for the web-frontend
@@ -191,6 +203,16 @@ currently issue a refresh token. `client.getUserinfo()` throws `TokenExpiredErro
 token has expired or been revoked — catch it and send the user back through
 `client.startAuthorization()` for a fresh login. There is no silent-refresh path to fall back
 to; this package makes that explicit rather than hiding it behind a generic error.
+
+`createOneHuxRouter()`'s own `GET /auth/userinfo` route already does exactly this: it catches
+`TokenExpiredError` specifically and responds `401 { "detail": "..." }` with the real message —
+never a silent 200, never swallowed. If you call `client.getUserinfo()` yourself outside of
+`createOneHuxRouter()` (see `example/server.js`), catch `TokenExpiredError` the same way in your
+own route rather than letting it propagate as an unhandled rejection.
+
+This is also why the session cookie's own `maxAge` (see the setup snippet above) is a separate
+concern from "how long is the user signed in" — the access token inside the session expires on
+its own 15-minute clock no matter what the cookie's lifetime is set to.
 
 ## Example project
 

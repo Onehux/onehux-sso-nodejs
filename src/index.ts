@@ -1,6 +1,6 @@
 // src/index.ts
 // Node.js/TypeScript SDK for OneHux Accounts SSO — Authorization Code + PKCE against a real,
-// general hosted login page. Formalizes what dashboard/docs/integrate/backend/nodejs's own
+// general hosted login page. Formalizes what docs/integrate/backend/nodejs's own
 // guide otherwise only shows as copy-paste example code.
 
 export { LOGOUT_EVENT_CLAIM_KEY, OneHuxClient } from './client.js';

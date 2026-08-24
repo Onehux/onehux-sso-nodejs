@@ -2,7 +2,7 @@
 
 A real, installable Node.js/TypeScript SDK wrapping OneHux Accounts' Authorization Code + PKCE
 flow against its real hosted login page — formalizing what
-[the Node.js integration guide](https://accounts.onehux.com/dashboard/docs/integrate/backend/nodejs)
+[the Node.js integration guide](https://accounts.onehux.com/docs/integrate/backend/nodejs)
 otherwise only shows as copy-paste example code.
 
 Two entrypoints:

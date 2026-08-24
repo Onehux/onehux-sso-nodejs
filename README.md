@@ -70,14 +70,16 @@ server-to-server via your `clientId`/`clientSecret`, never seen by an end user.
    > **A note on `cookie.maxAge`:** the example above deliberately doesn't set one, which makes
    > it a real browser-session cookie (dies when the browser closes) — not because that's
    > required, but because it's the safest default given the next paragraph. Whatever `maxAge`
-   > you do choose for your own session cookie is **completely independent** of the OneHux
-   > access token's own 15-minute lifetime stored inside that session. Setting a long `maxAge`
-   > (a week, a month) does **not** keep the user "signed in" for that long — it only controls
-   > how long the *cookie* survives. The *access token* inside it stops working after 15 minutes
-   > regardless, and every `/auth/userinfo` call after that point throws `TokenExpiredError`
-   > (see "No refresh token today" below). Pick `maxAge` for your own UX reasons, but don't treat
-   > it as, or document it to users as, a "stay signed in for N days" setting — this package
-   > doesn't have one.
+   > you do choose for your own session cookie is **independent** of how long the user actually
+   > stays signed in. `createOneHuxRouter()`'s `/auth/userinfo` route now silently refreshes an
+   > expired access token using the stored refresh token (see "Refresh tokens" below) — so a
+   > signed-in user's real session length is bounded by the refresh token's own lifetime (30
+   > days for a confidential client like this one; see the backend repo's README.md ADR-081),
+   > not by the access token's 15 minutes, and *also* not by your cookie's `maxAge`. If your
+   > cookie's `maxAge` outlives the refresh token itself, the cookie will still exist but
+   > `/auth/userinfo` will eventually throw `TokenExpiredError` anyway once the refresh token
+   > itself expires or is rejected — that's still real and still possible, just on a longer,
+   > rotation-extended clock instead of a flat 15 minutes.
 
    This gives you four real, working routes: `/auth/login`, `/auth/callback`, `/auth/logout`,
    and `/auth/userinfo` (a ready-to-use JSON endpoint your own frontend can call with
@@ -89,7 +91,7 @@ server-to-server via your `clientId`/`clientSecret`, never seen by an end user.
 ## Using the client directly (any framework, or a custom flow)
 
 ```ts
-import { OneHuxClient } from '@onehux/sso';
+import { OneHuxClient, TokenExpiredError } from '@onehux/sso';
 
 const client = new OneHuxClient({ /* ...same options as above... */ });
 
@@ -104,7 +106,21 @@ const tokens = await client.exchangeCode({
   codeVerifier: session.onehuxSsoPkceVerifier
 });
 
-const claims = await client.getUserinfo({ accessToken: tokens.accessToken });
+let claims;
+try {
+  claims = await client.getUserinfo({ accessToken: tokens.accessToken });
+} catch (err) {
+  if (err instanceof TokenExpiredError && session.onehuxSsoRefreshToken) {
+    // getUserinfo() never retries itself (it's a pure API call wrapper, no session concept) —
+    // a caller using OneHuxClient directly owns this retry, same as createOneHuxRouter()'s own
+    // /auth/userinfo route does internally. See "Refresh tokens" below.
+    const refreshed = await client.refreshAccessToken({ refreshToken: session.onehuxSsoRefreshToken });
+    session.onehuxSsoRefreshToken = refreshed.refreshToken; // rotated — persist the new one
+    claims = await client.getUserinfo({ accessToken: refreshed.accessToken });
+  } else {
+    throw err;
+  }
+}
 
 const logoutUrl = client.buildLogoutUrl();
 ```
@@ -196,23 +212,41 @@ app.use(
 
 Spec: [openid-connect-backchannel-1_0](https://openid.net/specs/openid-connect-backchannel-1_0.html).
 
-## No refresh token today — this is real, not a bug
+## Refresh tokens
 
-OneHux Accounts access tokens are a 15-minute, single-issue lifetime. This platform does not
-currently issue a refresh token. `client.getUserinfo()` throws `TokenExpiredError` when the
-token has expired or been revoked — catch it and send the user back through
-`client.startAuthorization()` for a fresh login. There is no silent-refresh path to fall back
-to; this package makes that explicit rather than hiding it behind a generic error.
+OneHux Accounts access tokens are a 15-minute, single-issue lifetime — that hasn't changed. What
+has: every real login now also issues a **refresh token** (backend repo README.md ADR-081, RFC
+6749 §6 / RFC 9700 §4.14.2 rotation with reuse detection), which this package uses to renew an
+expired access token without a full re-login.
 
-`createOneHuxRouter()`'s own `GET /auth/userinfo` route already does exactly this: it catches
-`TokenExpiredError` specifically and responds `401 { "detail": "..." }` with the real message —
-never a silent 200, never swallowed. If you call `client.getUserinfo()` yourself outside of
-`createOneHuxRouter()` (see `example/server.js`), catch `TokenExpiredError` the same way in your
-own route rather than letting it propagate as an unhandled rejection.
+`createOneHuxRouter()`'s `GET /auth/userinfo` route does this automatically: an expired access
+token triggers exactly one silent `refreshAccessToken()` call using the session's stored refresh
+token, and the retried `/userinfo` call's real claims are what the caller actually sees — never
+surfaced as an error unless the refresh itself also fails. The new access/refresh token pair is
+persisted back into the session, replacing the old one (a refresh token is **single-use and
+rotates on every real use** — the old value stops working the moment a new one is issued).
 
-This is also why the session cookie's own `maxAge` (see the setup snippet above) is a separate
-concern from "how long is the user signed in" — the access token inside the session expires on
-its own 15-minute clock no matter what the cookie's lifetime is set to.
+`TokenExpiredError` is still the error you catch, but its meaning is now "not signed in, full
+stop" rather than "the 15-minute access token died" — it's thrown only once a refresh has
+already been attempted and failed too (or no refresh token was ever stored, e.g. a session from
+before this package version). In every one of those cases, catch it and send the user back
+through `client.startAuthorization()` for a fresh login. The backend deliberately does not tell
+this package *why* a refresh failed — ordinary expiry, an already-rotated token being replayed
+(a real reuse/compromise signal), or the underlying session being revoked all produce the same
+generic rejection (RFC 9700 §4.14.2's own reasoning: the server can't tell which party presented
+the stale token) — so this package has nothing more specific to offer a caller than "not valid
+anymore."
+
+If you call `client.getUserinfo()` yourself outside of `createOneHuxRouter()` (see
+`example/server.js`), it never retries on your behalf — it's a pure API call wrapper with no
+session concept. Catch `TokenExpiredError`, call `client.refreshAccessToken()` yourself if you
+have a stored refresh token, persist the newly-rotated one, and retry once — see "Using the
+client directly" above for the real pattern.
+
+**Public clients** (a future mobile/desktop SDK, no `client_secret`) get tighter refresh-token
+settings than this package's confidential-client model (7-day idle timeout / 14-day absolute
+lifetime vs. 30/30 here) — not relevant to this package today, but worth knowing the number
+"30 days" above isn't a platform-wide constant.
 
 ## Example project
 

@@ -62,7 +62,22 @@ app.get('/', async (req, res) => {
 	}
 
 	try {
-		const claims = await client.getUserinfo({ accessToken });
+		let claims;
+		try {
+			claims = await client.getUserinfo({ accessToken });
+		} catch (err) {
+			// getUserinfo() never retries itself — this route calls the client directly rather
+			// than going through createOneHuxRouter()'s own /auth/userinfo (which already does
+			// this same retry internally), so it owns the refresh-and-retry itself, same as the
+			// README's "Using the client directly" section documents.
+			if (!(err instanceof TokenExpiredError) || !req.session.onehuxSsoRefreshToken) throw err;
+			const refreshed = await client.refreshAccessToken({
+				refreshToken: req.session.onehuxSsoRefreshToken
+			});
+			req.session.onehuxAccessToken = refreshed.accessToken;
+			req.session.onehuxSsoRefreshToken = refreshed.refreshToken; // rotated — persist the new one
+			claims = await client.getUserinfo({ accessToken: refreshed.accessToken });
+		}
 		res.send(
 			page(`
 			<h1>onehux-sso example — signed in</h1>
@@ -78,7 +93,7 @@ app.get('/', async (req, res) => {
 		if (err instanceof TokenExpiredError) {
 			return res
 				.status(401)
-				.send(page(`<h1>Token expired</h1><pre>${err.message}</pre><a class="btn" href="/auth/login">Sign in again</a>`));
+				.send(page(`<h1>Session expired</h1><pre>${err.message}</pre><a class="btn" href="/auth/login">Sign in again</a>`));
 		}
 		// Same reasoning as onehux-sso's own /auth/userinfo route: never re-throw an
 		// unrecognized error (e.g. a transient network failure reaching OneHux) out of an

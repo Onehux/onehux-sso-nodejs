@@ -119,6 +119,7 @@ describe('exchangeCode error branches', () => {
 			jsonResponse({
 				access_token: 'at-123',
 				id_token: 'id-456',
+				refresh_token: 'rt-789',
 				token_type: 'Bearer',
 				expires_in: 900,
 				scope: 'openid profile email'
@@ -127,6 +128,7 @@ describe('exchangeCode error branches', () => {
 		const client = newTestClient();
 		const tokens = await client.exchangeCode({ code: 'c', state: 's', expectedState: 's', codeVerifier: 'v' });
 		expect(tokens.accessToken).toBe('at-123');
+		expect(tokens.refreshToken).toBe('rt-789');
 		expect(tokens.expiresIn).toBe(900);
 	});
 });
@@ -143,6 +145,55 @@ describe('getUserinfo', () => {
 		vi.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 401 }));
 		const client = newTestClient();
 		await expect(client.getUserinfo({ accessToken: 'expired' })).rejects.toBeInstanceOf(TokenExpiredError);
+	});
+});
+
+describe('refreshAccessToken', () => {
+	beforeEach(() => {
+		vi.stubGlobal('fetch', vi.fn());
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('resolves with a rotated token triple on success, POSTing grant_type=refresh_token', async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(
+			jsonResponse({
+				access_token: 'at-new',
+				id_token: 'id-new',
+				refresh_token: 'rt-new',
+				token_type: 'Bearer',
+				expires_in: 900,
+				scope: 'openid profile email'
+			})
+		);
+		const client = newTestClient();
+		const tokens = await client.refreshAccessToken({ refreshToken: 'rt-old' });
+
+		expect(tokens.accessToken).toBe('at-new');
+		expect(tokens.refreshToken).toBe('rt-new');
+		expect(fetch).toHaveBeenCalledWith(
+			'https://api.example.com/api/v1/oauth/token/',
+			expect.objectContaining({ method: 'POST' })
+		);
+		const [, init] = vi.mocked(fetch).mock.calls[0];
+		const body = JSON.parse((init as RequestInit).body as string);
+		expect(body).toMatchObject({
+			grant_type: 'refresh_token',
+			refresh_token: 'rt-old',
+			client_id: 'test-client-id',
+			client_secret: 'test-client-secret'
+		});
+	});
+
+	it('throws TokenExpiredError on a non-2xx response (expired, reuse-detected, or revoked — indistinguishable by design)', async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(
+			jsonResponse({ error: 'invalid_grant', error_description: 'Refresh token is no longer valid.' }, 400)
+		);
+		const client = newTestClient();
+		await expect(client.refreshAccessToken({ refreshToken: 'rt-dead' })).rejects.toBeInstanceOf(
+			TokenExpiredError
+		);
 	});
 });
 

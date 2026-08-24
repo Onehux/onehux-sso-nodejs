@@ -71,6 +71,7 @@ export interface PublicApplication {
 export interface TokenResult {
 	accessToken: string;
 	idToken: string;
+	refreshToken: string;
 	tokenType: string;
 	expiresIn: number;
 	scope: string;
@@ -166,6 +167,51 @@ export class OneHuxClient {
 		return {
 			accessToken: body.access_token as string,
 			idToken: body.id_token as string,
+			refreshToken: body.refresh_token as string,
+			tokenType: body.token_type as string,
+			expiresIn: body.expires_in as number,
+			scope: body.scope as string
+		};
+	}
+
+	/** Rotates `refreshToken` for a fresh access/id/refresh token triple via
+	 * POST {apiBaseUrl}/api/v1/oauth/token/ (grant_type=refresh_token — backend repo README.md
+	 * ADR-081). The presented refresh token is invalidated by this call whether it succeeds or
+	 * fails to be usable again — the backend's own rotation-with-reuse-detection means a
+	 * refresh token is single-use; the caller MUST persist the newly-returned refreshToken and
+	 * discard the one just presented, never retry this same call with the old value.
+	 *
+	 * Throws TokenExpiredError on any non-2xx response — a rejected refresh token means the
+	 * family expired, was rotated away already (reuse), or the underlying Session was revoked
+	 * (logout, Back-Channel Logout, admin action). In every one of those cases the correct
+	 * remedy is the same: send the user through OneHuxClient.startAuthorization() again. This
+	 * client deliberately does not distinguish *why* the refresh failed — the backend itself
+	 * returns the same generic invalid_grant for an ordinary expiry and a detected compromise
+	 * (RFC 9700 §4.14.2's own reasoning: it can't tell which party presented the stale token),
+	 * so this client has no more information to offer a caller than "not valid anymore." */
+	async refreshAccessToken(params: { refreshToken: string }): Promise<TokenResult> {
+		const response = await fetch(`${this.apiBaseUrl}/api/v1/oauth/token/`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				grant_type: 'refresh_token',
+				refresh_token: params.refreshToken,
+				client_id: this.clientId,
+				client_secret: this.clientSecret
+			})
+		});
+		if (!response.ok) {
+			throw new TokenExpiredError(
+				'The refresh token was rejected — it has expired, was already rotated away, or the ' +
+					'underlying session was revoked. Send the user back through ' +
+					'OneHuxClient.startAuthorization().'
+			);
+		}
+		const body = (await response.json()) as Record<string, unknown>;
+		return {
+			accessToken: body.access_token as string,
+			idToken: body.id_token as string,
+			refreshToken: body.refresh_token as string,
 			tokenType: body.token_type as string,
 			expiresIn: body.expires_in as number,
 			scope: body.scope as string
@@ -200,9 +246,11 @@ export class OneHuxClient {
 	/** GET {apiBaseUrl}/api/v1/oauth/userinfo/ — real claims (sub, name, email, picture,
 	 * roles, permissions, ...), recomputed live by the backend on every call, never cached
 	 * here. Throws TokenExpiredError on any non-2xx response: OneHux Accounts access tokens
-	 * are a 15-minute, single-issue lifetime with no refresh token today, so an expired/
-	 * invalid token here means "send the user through startAuthorization() again," not
-	 * "retry." */
+	 * are a 15-minute, single-issue lifetime. This method itself never retries — it's a pure
+	 * API call wrapper with no session concept (see this file's own header comment). A caller
+	 * holding a refresh token should catch TokenExpiredError, call refreshAccessToken(), and
+	 * retry this call once with the new access token — createOneHuxRouter()'s /userinfo route
+	 * does exactly that automatically; a caller using OneHuxClient directly must do it itself. */
 	async getUserinfo(params: { accessToken: string }): Promise<Record<string, unknown>> {
 		const response = await fetch(`${this.apiBaseUrl}/api/v1/oauth/userinfo/`, {
 			headers: { Authorization: `Bearer ${params.accessToken}` }

@@ -22,6 +22,7 @@ import {
 const STATE_SESSION_KEY = 'onehuxSsoState';
 const VERIFIER_SESSION_KEY = 'onehuxSsoPkceVerifier';
 const SID_SESSION_KEY = 'onehuxSsoSid';
+const REFRESH_TOKEN_SESSION_KEY = 'onehuxSsoRefreshToken';
 
 /** Pluggable sid -> Express session-id index (OIDC Back-Channel Logout). A logout_token POST
  * carries the OneHux Session id (`sid`) but nothing about which local Express session that
@@ -125,6 +126,13 @@ export function createOneHuxRouter(
 			delete session[STATE_SESSION_KEY];
 			delete session[VERIFIER_SESSION_KEY];
 			session[sessionAccessTokenKey] = tokens.accessToken;
+			// Internal to this router's own /userinfo retry logic below — deliberately not a
+			// configurable option like sessionAccessTokenKey: a refresh token is single-use and
+			// rotates on every real use (backend repo README.md ADR-081), so letting consumer
+			// app code read/use it directly risks a double-rotation race against this router's
+			// own retry path. Consumer code that needs "am I signed in" should keep using
+			// sessionAccessTokenKey / GET /userinfo, same as before this feature existed.
+			session[REFRESH_TOKEN_SESSION_KEY] = tokens.refreshToken;
 
 			// OIDC Back-Channel Logout (optional): index this Express session by the OneHux
 			// Session id (`sid`) carried in the id_token, so a later logout_token POST to
@@ -172,14 +180,15 @@ export function createOneHuxRouter(
 	});
 
 	router.get('/logout', (req: Request, res: Response) => {
-		delete (req.session as Record<string, unknown>)[sessionAccessTokenKey];
+		const session = req.session as Record<string, unknown>;
+		delete session[sessionAccessTokenKey];
+		delete session[REFRESH_TOKEN_SESSION_KEY];
 		res.redirect(client.buildLogoutUrl());
 	});
 
 	router.get('/userinfo', async (req: Request, res: Response) => {
-		const accessToken = (req.session as Record<string, unknown>)[sessionAccessTokenKey] as
-			| string
-			| undefined;
+		const session = req.session as Record<string, unknown>;
+		const accessToken = session[sessionAccessTokenKey] as string | undefined;
 		if (!accessToken) {
 			res.status(401).json({ detail: 'Not signed in.' });
 			return;
@@ -189,7 +198,50 @@ export function createOneHuxRouter(
 			res.json(claims);
 		} catch (err) {
 			if (err instanceof TokenExpiredError) {
-				res.status(401).json({ detail: err.message });
+				const refreshToken = session[REFRESH_TOKEN_SESSION_KEY] as string | undefined;
+				if (!refreshToken) {
+					// No refresh token stored — either this session predates ADR-081 (pre-existing
+					// login, upgraded package) or refreshAccessToken() was never reached. Original
+					// behavior, unchanged.
+					res.status(401).json({ detail: err.message });
+					return;
+				}
+
+				// One silent refresh-and-retry attempt (backend repo README.md ADR-081): a
+				// rejected refresh token is a real failure (expired, already-rotated/reuse, or the
+				// session was revoked) — clear both stored tokens and force a full re-login. A
+				// network/unexpected failure reaching OneHux during the refresh call itself is NOT
+				// treated as a dead session (the stored tokens may still be perfectly valid) —
+				// surfaced as 502, same as every other transient-failure boundary in this file.
+				let refreshed;
+				try {
+					refreshed = await client.refreshAccessToken({ refreshToken });
+				} catch (refreshErr) {
+					if (refreshErr instanceof TokenExpiredError) {
+						delete session[sessionAccessTokenKey];
+						delete session[REFRESH_TOKEN_SESSION_KEY];
+						res.status(401).json({ detail: 'Session expired. Please sign in again.' });
+						return;
+					}
+					console.error('OneHux SSO: unexpected error during token refresh:', refreshErr);
+					res.status(502).json({ detail: 'Unable to reach OneHux right now. Please try again.' });
+					return;
+				}
+
+				session[sessionAccessTokenKey] = refreshed.accessToken;
+				session[REFRESH_TOKEN_SESSION_KEY] = refreshed.refreshToken;
+				try {
+					const claims = await client.getUserinfo({ accessToken: refreshed.accessToken });
+					res.json(claims);
+				} catch (retryErr) {
+					// A freshly-minted access token being immediately rejected shouldn't normally
+					// happen — don't loop into another refresh attempt, just surface it as expired.
+					console.error(
+						'OneHux SSO: freshly refreshed access token was rejected by /userinfo:',
+						retryErr
+					);
+					res.status(401).json({ detail: 'Session expired. Please sign in again.' });
+				}
 				return;
 			}
 			// Same reasoning as the /callback route: never re-throw an unrecognized error out of

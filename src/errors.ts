@@ -42,13 +42,19 @@ export class StepUpRequiredError extends OneHuxSSOError {
 	}
 }
 
-/** GET /api/v1/oauth/userinfo/ rejected the access token.
+/** GET /api/v1/oauth/userinfo/ rejected the access token, OR
+ * OneHuxClient.refreshAccessToken() had its refresh token rejected.
  *
- * OneHux Accounts does not currently issue a refresh token (access tokens are a 15-minute,
- * single-issue lifetime) — this is a real, permanent platform constraint, not a bug in this
- * client. Callers must catch this and route the user back through
- * OneHuxClient.startAuthorization() for a fresh login; there is no silent-refresh path to fall
- * back to. */
+ * OneHux Accounts access tokens are a 15-minute lifetime; refresh tokens (backend repo
+ * README.md ADR-081) let a caller renew one without a full re-login, but are themselves
+ * single-use and eventually expire too. This error means whichever credential was presented —
+ * access token or refresh token — is no longer valid, for any reason: ordinary expiry,
+ * already-rotated-away reuse, or the underlying session being revoked (logout, Back-Channel
+ * Logout, admin action). The backend deliberately does not distinguish these to the caller
+ * (RFC 9700 §4.14.2), so neither does this error. Callers must route the user back through
+ * OneHuxClient.startAuthorization() for a fresh login — createOneHuxRouter()'s /userinfo route
+ * already attempts one silent refresh-and-retry first when a refresh token is stored; this
+ * error means that also failed (or no refresh token was available to try). */
 export class TokenExpiredError extends OneHuxSSOError {}
 
 /** GET /api/v1/organizations/{orgSlug}/public-applications/ returned a non-2xx response — no
